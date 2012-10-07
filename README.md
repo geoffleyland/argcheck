@@ -78,6 +78,7 @@ Lua (5.1 or 5.2) or LuaJIT.
 ## 4. Issues
 
 + Only handles the simplest form of ldoc comments
++ Doesn't handle metatable types and checker functions like checks.c
 
 
 ## 5. Wishlist
