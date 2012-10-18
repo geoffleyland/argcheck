@@ -30,76 +30,134 @@ local function get_source(filename)
 end
 
 
--- parse function headers ---------------------------------------------------
+-- parse comment lines -------------------------------------------------------
 
-local function parse_line(l)
-  local type_expression, name = l:match("%s*%-%-+%s*@tparam%s+(%S+)%s+(%S*)")
-  if not type_expression then
-    type_expression = l:match("%s*%-%-+%s*(.*)")
-  end
-  
-  local types = {}
-  local next = type_expression:match("%?|?(.*)")
-  if next then
-    types[1] = "nil"
-    type_expression = next
+--- Turn a line like "?|string|number" into a list of constraints
+-- @tparam string l the line to parse
+
+local function parse_constraints(l)
+  local constraints = {}
+  local l2 = l:match("%?|?(.*)")
+  if l2 then
+    constraints[1] = "nil"
+    l = l2
   end
   while true do
-    local t, next = type_expression:match("([^|]+)|(.*)")
-    if not t then
-      if type_expression ~= "" then types[#types+1] = type_expression end
+    local c, l2 = l:match("([^|]+)|(.*)")
+    if not c then
+      if l ~= "" then constraints[#constraints+1] = l end
       break
     else
-      types[#types+1] = t
+      constraints[#constraints+1] = c
     end
-    type_expression = next
+    l = l2
   end
 
-  if not types[1] or (types[1] == "nil" and not types[2]) then
+  if not constraints[1] or
+     (constraints[1] == "nil" and not constraints[2]) then
     return
   end
 
-  return types, name
+  return constraints
 end
 
+
+--- parse comments like "-- string [foo]"
+local function parse_predef_line(l)
+  local constraints, name = l:match("%s*%-%-+%s*(%S*)%s*(%S*)")
+  if constraints then
+    return parse_constraints(constraints), name:match("([%a_][%w_]*)")
+  end
+end
+
+
+--- parse comments like "-- @tparam string [foo]"
+local function parse_luadoc_predef_line(l)
+  local constraints, name = l:match("%s*%-%-+%s*@tparam%s+(%S+)%s+(%S*)")
+  if constraints then
+    return parse_constraints(constraints), name:match("([%a_][%w_]*)")
+  end
+end
+
+
+--- parse comments like "foo, -- string:"
+local function parse_postdef_line(l)
+  local name, rest = l:match("%s*([%a_][%w_]*)%s*[,)]%s*%-%-+%s*(.*)")
+  local constraints = rest and (rest:match("^([^:%s]+):") or rest:match("^(%S+)%s*$"))
+  if constraints then
+    return parse_constraints(constraints), name
+  end
+end
+
+
+-- parse function comments ---------------------------------------------------
 
 local function parse_function(filename, linedefined)
   local source = get_source(filename)
   if not source then return nil end
-  local start_line = nil
+  
+  -- walk back from linedefined to the start of the comments
+  local start_line = 1
   for i = linedefined - 1, 1, -1 do
     if not source[i]:match("%-%-") then
       start_line = i + 1
       break
     end
   end
-  local types = {}
-  for i = start_line or 1, linedefined - 1 do
-    local t, name = parse_line(source[i])
-    if name then
-      types[name] = t
-    else
-      types[#types+1] = t
-    end
+
+  -- are we looking at Luadoc comments?
+  local parse_pre, parse_post
+  if source[start_line]:match("^%s*%-%-%-") then
+    parse_pre, parse_post = parse_luadoc_predef_line, parse_postdef_line
+  else
+    parse_pre, parse_post = parse_predef_line, parse_postdef_line
   end
-  if not next(types) then
+
+  local constraints = {}
+
+  -- Walk forward through the pre-definition comments looking for type
+  -- constraints
+  for i = start_line, linedefined - 1 do
+    local c, name = parse_pre(source[i])
+    constraints[name or (#constraints+1)] = c
+  end
+
+  -- walk forward for the looking for comments like
+  -- "a, -- <constraint>", stopping when we see the closing parenthesis for
+  -- the function arguments
+  local i = linedefined
+  while i > 0 do
+    local line = source[i]
+    if i == linedefined then
+      line = line:match("%((.*)")
+    end
+    local c, name = parse_post(line)
+    if c then constraints[name] = c end
+    local before_comment = line:match("(.-)%-%-") or line
+    if before_comment:match("%)") then
+      break
+    end
+    i = i + 1
+  end
+
+  if not next(constraints) then
     return
   else
-    return types
+    return constraints
   end
 end
 
 
-local function_cache = {}
+local constraint_cache = {}
 
-local function get_function_info(filename, linedefined)
+local function get_constraints(filename, linedefined)
   local key = filename..":"..tostring(linedefined)
-  local info = function_cache[key]
+  local constraints = constraint_cache[key]
   if not info then
-    info = parse_function(filename, linedefined)
-    function_cache[key] = info == nil and -1 or info
+    constraints = parse_function(filename, linedefined)
+    constraint_cache[key] = constraints == nil and -1 or constraints
   end
-  return (info ~= -1 and info) or nil
+  return (constraints ~= -1 and constraints) or nil
 end
 
 
@@ -107,22 +165,22 @@ end
 
 local warn
 
-local function check_arg(value, types, argnum, fname)
+local function check_arg(value, constraints, argnum, fname)
   local ok
-  for i = 1, #types do
-    local t = types[i]
-    if type(value) == types[i] then
+  for i = 1, #constraints do
+    local t = constraints[i]
+    if type(value) == constraints[i] then
       ok = true
       break
     end
   end
 
   if not ok then
-    local ts = types[1]
-    for i = 2, #types - 1 do
-      ts = ts..", "..types[i]
+    local ts = constraints[1]
+    for i = 2, #constraints - 1 do
+      ts = ts..", "..constraints[i]
     end
-    if types[2] then ts = ts.." or "..types[#types] end
+    if constraints[2] then ts = ts.." or "..constraints[#constraints] end
     local message = ("bad argument #%d to '%s' (%s expected, got %s)"):
                     format(argnum, fname, ts, type(value))
     if warn then
@@ -139,18 +197,18 @@ local function check_args()
   local source_file_name = info.source:match("@(.*)")
   if not source_file_name then return end
 
-  local types = get_function_info(source_file_name, info.linedefined)
-  if not types then return end
+  local constraints = get_constraints(source_file_name, info.linedefined)
+  if not constraints then return end
 
   local i = 1
   while true do
     local name, value = debug.getlocal(2, i)
     if not name then break end
-    if types[name] then
-      check_arg(value, types[name], i, info.name)
+    if constraints[name] then
+      check_arg(value, constraints[name], i, info.name)
     end
-    if types[i] then
-      check_arg(value, types[i], i, info.name)
+    if constraints[i] then
+      check_arg(value, constraints[i], i, info.name)
     end
     i = i + 1
   end
