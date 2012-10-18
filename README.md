@@ -106,7 +106,9 @@ Constraints can be:
     If neither number contains a decimal point or an `e` or `E`
     (as in `10e-3`), it's assumed you also want an integer
   * Names of functions in an internal table you can't change yet.
-    So far the only function in the table is `integer`
+    So far the only functions in the table are
+    + `integer`: the value is a number and an integer
+    + `anything`: the value is not nil
   * If none of the above, and the value is table, argcheck will try to match
     the table's metatable to the constraint:
     + if the metatable has a `__type` field that matches the constraint

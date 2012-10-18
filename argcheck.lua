@@ -176,7 +176,11 @@ local lua_types =
 
 local function_constraints =
 {
-  integer       = function(value) return math.floor(value) == value end,
+  integer       = function(value)
+                    return type(value) == "number" and
+                           math.floor(value) == value
+                  end,
+  anything      = function(value) return value ~= nil end,
 }
 
 local function check_constraint(value, constraint, func)
@@ -248,8 +252,9 @@ local function check_arg(value, constraints, argnum, fname, func)
       ts = ts..", "..constraints[i]
     end
     if constraints[2] then ts = ts.." or "..constraints[#constraints] end
-    local message = ("bad argument #%d to '%s' (%s expected, got %s '%s')"):
-                    format(argnum, fname, ts, type(value), tostring(value))
+    local message = ("bad argument #%d to '%s' (%s expected, got %s%s)"):
+                    format(argnum, fname, ts, type(value),
+                           value == nil and "" or " '"..tostring(value).."'")
     if warn then
       io.stderr:write(message, "\n")
     else
