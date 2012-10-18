@@ -174,14 +174,42 @@ local lua_types =
   table         = true
 }
 
+local function_constraints =
+{
+  integer       = function(value) return math.floor(value) == value end,
+}
+
 local function check_constraint(value, constraint, func)
   if lua_types[constraint] then
     return type(value) == constraint
+
+  elseif function_constraints[constraint] then
+    return function_constraints[constraint](value)
+
+  -- literal match for a string
+  elseif constraint:match('^".*"$') or constraint:match("^'.*'$") then
+    return value == constraint:sub(2, -2)
+
+  -- literal match for a string
+  elseif tonumber(constraint) then
+    return value == tonumber(constraint)
+
+  -- number range
+  elseif constraint:match(".*%.%..*") then
+    local low, high = constraint:match("(.*)%.%.(.*)")
+    local integer = not low:match("[%.eE]") and not high:match("[%.eE]")
+    local low, high = tonumber(low), tonumber(high)
+    if not low or not high then
+      error("Couldn't make sense of range constraint '"..constraint.."'")
+    end
+    if integer and value ~= math.floor(value) then return false end
+    return value >= low and value <= high
+
+  -- try to work out if the constraint name is in any way associated
+  -- with the metatable
   elseif type(value) == "table" then
     local mt = getmetatable(value)
     if mt then
-      -- try to work out if the constraint name is in any way associated
-      -- with the metatable
       if mt.__type == constraint or
          mt.__typename == constraint or
          (mt.__typeinfo and mt.__typeinfo[constraint]) then
@@ -220,8 +248,8 @@ local function check_arg(value, constraints, argnum, fname, func)
       ts = ts..", "..constraints[i]
     end
     if constraints[2] then ts = ts.." or "..constraints[#constraints] end
-    local message = ("bad argument #%d to '%s' (%s expected, got %s)"):
-                    format(argnum, fname, ts, type(value))
+    local message = ("bad argument #%d to '%s' (%s expected, got %s '%s')"):
+                    format(argnum, fname, ts, type(value), tostring(value))
     if warn then
       io.stderr:write(message, "\n")
     else
