@@ -1,4 +1,4 @@
--- Copyright (c) 2009-2011 Incremental IP Limited
+-- Copyright (c) 2012 Incremental IP Limited
 -- see LICENSE for license information
 
 
@@ -34,7 +34,6 @@ end
 
 --- Turn a line like "?|string|number" into a list of constraints
 -- @tparam string l the line to parse
-
 local function parse_constraints(l)
   local constraints = {}
   local l2 = l:match("%?|?(.*)")
@@ -161,15 +160,55 @@ local function get_constraints(filename, linedefined)
 end
 
 
+-- check a single constraint against a value ---------------------------------
+
+local lua_types =
+{
+  ["nil"]       = true,
+  boolean       = true,
+  number        = true,
+  string        = true,
+  ["function"]  = true, 
+  userdata      = true,
+  thread        = true,
+  table         = true
+}
+
+local function check_constraint(value, constraint, func)
+  if lua_types[constraint] then
+    return type(value) == constraint
+  elseif type(value) == "table" then
+    local mt = getmetatable(value)
+    if mt then
+      -- try to work out if the constraint name is in any way associated
+      -- with the metatable
+      if mt.__type == constraint or
+         mt.__typename == constraint or
+         (mt.__typeinfo and mt.__typeinfo[constraint]) then
+        return true
+      end
+      if _G and _G[constraint] == mt then return true end
+      if _ENV and _ENV[constraint] == mt then return true end
+      local i = 1
+      while true do
+        local name, value = debug.getupvalue(func, i)
+        if not name then break end
+        if name == constraint and value == mt then return true end
+        i = i + 1
+      end
+    end
+  end
+end
+
+
 -- check arguments -----------------------------------------------------------
 
 local warn
 
-local function check_arg(value, constraints, argnum, fname)
+local function check_arg(value, constraints, argnum, fname, func)
   local ok
   for i = 1, #constraints do
-    local t = constraints[i]
-    if type(value) == constraints[i] then
+    if check_constraint(value, constraints[i], func) then
       ok = true
       break
     end
@@ -193,7 +232,7 @@ end
 
 
 local function check_args()
-  local info = debug.getinfo(2, "Sn")
+  local info = debug.getinfo(2, "Snf")
   local source_file_name = info.source:match("@(.*)")
   if not source_file_name then return end
 
@@ -205,10 +244,10 @@ local function check_args()
     local name, value = debug.getlocal(2, i)
     if not name then break end
     if constraints[name] then
-      check_arg(value, constraints[name], i, info.name)
+      check_arg(value, constraints[name], i, info.name, info.func)
     end
     if constraints[i] then
-      check_arg(value, constraints[i], i, info.name)
+      check_arg(value, constraints[i], i, info.name, info.func)
     end
     i = i + 1
   end
