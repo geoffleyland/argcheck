@@ -160,6 +160,60 @@ local function get_constraints(filename, linedefined)
 end
 
 
+-- function constraints ------------------------------------------------------
+
+local function_constraints =
+{
+  integer       = function(value)
+                    return type(value) == "number" and
+                           math.floor(value) == value
+                  end,
+  anything      = function(value) return value ~= nil end,
+  file          = function(value) return io.type(value) == "file" end,
+}
+
+
+-- type checkers -------------------------------------------------------------
+
+local type_checkers =
+{
+  function(constraint, mt)
+    return mt.__type == constraint
+  end,
+  function(constraint, mt)
+    return mt.__typename == constraint
+  end,
+  function(constraint, mt)
+    return mt._type == constraint
+  end,
+  function(constraint, mt)
+    return tostring(mt.__type) == constraint
+  end,
+  function(constraint, mt)
+    return mt.__typeinfo and mt.__typeinfo[constraint]
+  end,
+  function(constraint, mt, v)
+    local __type = mt.__type
+    return type(__type) == "function" and type(v) == constraint
+  end,
+  function(constraint, mt)
+    return _G and _G[constraint] == mt
+  end,
+  function(constraint, mt)
+    return _ENV and _EVN[constraint] == mt
+  end,
+  function(constraint, mt, v, f)
+    local i = 1
+    while true do
+      local name, value = debug.getupvalue(f, i)
+      if not name then break end
+      if name == constraint and value == mt then return true end
+      i = i + 1
+    end
+  end
+}
+
+
 -- check a single constraint against a value ---------------------------------
 
 local lua_types =
@@ -174,19 +228,11 @@ local lua_types =
   table         = true
 }
 
-local function_constraints =
-{
-  integer       = function(value)
-                    return type(value) == "number" and
-                           math.floor(value) == value
-                  end,
-  anything      = function(value) return value ~= nil end,
-  file          = function(value) return io.type(value) == "file" end,
-}
-
 local function check_constraint(value, constraint, func)
+  local vt = type(value)
+
   if lua_types[constraint] then
-    return type(value) == constraint
+    return vt == constraint
 
   elseif function_constraints[constraint] then
     return function_constraints[constraint](value)
@@ -195,7 +241,7 @@ local function check_constraint(value, constraint, func)
   elseif constraint:match('^".*"$') or constraint:match("^'.*'$") then
     return value == constraint:sub(2, -2)
 
-  -- literal match for a string
+  -- literal match for a number
   elseif tonumber(constraint) then
     return value == tonumber(constraint)
 
@@ -210,24 +256,13 @@ local function check_constraint(value, constraint, func)
     if integer and value ~= math.floor(value) then return false end
     return value >= low and value <= high
 
-  -- try to work out if the constraint name is in any way associated
-  -- with the metatable
-  elseif type(value) == "table" then
+  -- try all the type checkers to see if if the constraint name is associated
+  -- with the value or its metatable
+  elseif vt == "table" or vt == "userdata" then
     local mt = getmetatable(value)
-    if mt then
-      if mt.__type == constraint or
-         mt.__typename == constraint or
-         (mt.__typeinfo and mt.__typeinfo[constraint]) then
+    for i = 1, #type_checkers do
+      if type_checkers[i](constraint, mt, value, func) then
         return true
-      end
-      if _G and _G[constraint] == mt then return true end
-      if _ENV and _ENV[constraint] == mt then return true end
-      local i = 1
-      while true do
-        local name, value = debug.getupvalue(func, i)
-        if not name then break end
-        if name == constraint and value == mt then return true end
-        i = i + 1
       end
     end
   end
