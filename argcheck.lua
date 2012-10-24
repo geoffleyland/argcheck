@@ -181,6 +181,7 @@ local function_constraints =
                            math.floor(value) == value
                   end,
   anything      = function(value) return value ~= nil end,
+  file          = function(value) return io.type(value) == "file" end,
 }
 
 local function check_constraint(value, constraint, func)
