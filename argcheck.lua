@@ -133,7 +133,7 @@ local function parse_function(filename, linedefined)
     function_name = function_name or fname
   end
 
-  -- walk forward for the looking for comments like
+  -- walk forward from the definition looking for comments like
   -- "a, -- <constraint>", stopping when we see the closing parenthesis for
   -- the function arguments
   local i = linedefined
