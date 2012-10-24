@@ -147,16 +147,27 @@ local function parse_function(filename, linedefined)
 end
 
 
-local constraint_cache = {}
+local constraints_by_func = {}
+local constraints_by_line = {}
 
-local function get_constraints(filename, linedefined)
-  local key = filename..":"..tostring(linedefined)
-  local constraints = constraint_cache[key]
-  if not info then
-    constraints = parse_function(filename, linedefined)
-    constraint_cache[key] = constraints == nil and -1 or constraints
+local function get_constraints(func)
+  local constraints
+
+  local info = debug.getinfo(func, "S")
+  local source_file_name = info.source:match("@(.*)")
+  if not source_file_name then
+    constraints = -1
+  else
+    local key = source_file_name..":"..tostring(info.linedefined)
+    constraints = constraints_by_line[key]
+    if not constraints then
+      constraints = parse_function(source_file_name, info.linedefined) or -1
+      constraints_by_line[key] = constraints
+    end
   end
-  return (constraints ~= -1 and constraints) or nil
+
+  constraints_by_func[func] = constraints
+  return constraints
 end
 
 
@@ -228,7 +239,8 @@ local lua_types =
   table         = true
 }
 
-local function check_constraint(value, constraint, func)
+
+local function check_constraint(constraint, value, func)
   local vt = type(value)
 
   if lua_types[constraint] then
@@ -260,9 +272,11 @@ local function check_constraint(value, constraint, func)
   -- with the value or its metatable
   elseif vt == "table" or vt == "userdata" then
     local mt = getmetatable(value)
-    for i = 1, #type_checkers do
-      if type_checkers[i](constraint, mt, value, func) then
-        return true
+    if mt then
+      for i = 1, #type_checkers do
+        if type_checkers[i](constraint, mt, value, func) then
+          return true
+        end
       end
     end
   end
@@ -273,10 +287,10 @@ end
 
 local warn
 
-local function check_arg(value, constraints, argnum, fname, func)
+local function check_arg(value, constraints, argnum, func)
   local ok
   for i = 1, #constraints do
-    if check_constraint(value, constraints[i], func) then
+    if check_constraint(constraints[i], value, func) then
       ok = true
       break
     end
@@ -288,9 +302,10 @@ local function check_arg(value, constraints, argnum, fname, func)
       ts = ts..", "..constraints[i]
     end
     if constraints[2] then ts = ts.." or "..constraints[#constraints] end
+    local vs = value == nil and "" or " '"..tostring(value).."'"
+    local fname = debug.getinfo(3, "n").name -- debug.getinfo(func, "n") doesn't seem to work
     local message = ("bad argument #%d to '%s' (%s expected, got %s%s)"):
-                    format(argnum, fname, ts, type(value),
-                           value == nil and "" or " '"..tostring(value).."'")
+                    format(argnum, fname, ts, type(value), vs)
     if warn then
       io.stderr:write(message, "\n")
     else
@@ -301,22 +316,26 @@ end
 
 
 local function check_args()
-  local info = debug.getinfo(2, "Snf")
-  local source_file_name = info.source:match("@(.*)")
-  if not source_file_name then return end
+  -- quickly see if we've parsed this closure before
+  local func = debug.getinfo(2, "f").func
+  local constraints = constraints_by_func[func]
 
-  local constraints = get_constraints(source_file_name, info.linedefined)
-  if not constraints then return end
+  -- otherwise, take a longer route
+  if not constraints then
+    constraints = get_constraints(func)
+  end
+
+  if constraints == -1 then return end
 
   local i = 1
   while true do
     local name, value = debug.getlocal(2, i)
     if not name then break end
     if constraints[name] then
-      check_arg(value, constraints[name], i, info.name, info.func)
+      check_arg(value, constraints[name], i, func)
     end
     if constraints[i] then
-      check_arg(value, constraints[i], i, info.name, info.func)
+      check_arg(value, constraints[i], i, func)
     end
     i = i + 1
   end
