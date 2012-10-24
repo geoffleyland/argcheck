@@ -200,7 +200,6 @@ local function_constraints =
                            math.floor(value) == value
                   end,
   anything      = function(value) return value ~= nil end,
-  file          = function(value) return io.type(value) == "file" end,
 }
 
 
@@ -363,6 +362,59 @@ local function check_args()
     i = i + 1
   end
 end
+
+
+-- file handling -------------------------------------------------------------
+
+local readable_files = setmetatable({}, { __mode = "k" })
+local writable_files = setmetatable({}, { __mode = "k" })
+
+readable_files[io.stdin] = 1
+writable_files[io.stdout] = 1
+writable_files[io.stderr] = 1
+
+local read_modes = { r=1, ["r+"]=1, ["w+"]=1, ["a+"]=1 }
+local write_modes = { w=1, ["r+"]=1, ["w+"]=1, a=1, ["a+"]=1}
+
+
+local rawopen = io.open
+io.open = function(name, mode)
+  local file, message = rawopen(name, mode)
+  if file then
+    mode = mode or "r"
+    mode = mode:sub(1, 2):lower()
+    readable_files[file] = read_modes[mode]
+    writable_files[file] = write_modes[write]
+  end
+  return file, message
+end
+
+local rawpopen = io.popen
+io.popen = function(name, mode)
+  local file, message = rawpopen(name, mode)
+  if file then
+    mode = mode or "r"
+    mode = mode:sub(1, 2):lower()
+    readable_files[file] = read_modes[mode]
+    writable_files[file] = write_modes[write]
+  end
+  return file, message
+end
+
+
+local rawtmpfile = io.tmpfile
+io.tmpfile = function()
+  local file, message = rawtmpfile()
+  if file then
+    writable_files[file] = true
+  end
+  return file, message
+end
+
+
+function_constraints.file    = function(value) return io.type(value) == "file" end
+function_constraints.filein  = function(value) return io.type(value) == "file" and readable_files[value] end
+function_constraints.fileout = function(value) return io.type(value) == "file" and writable_files[value] end
 
 
 -- turn it on ----------------------------------------------------------------
