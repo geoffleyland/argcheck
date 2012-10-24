@@ -18,7 +18,7 @@ Install with either `sudo make install` (no need to make) or
 `luarocks install argcheck` (which doesn't actually work yet, since I haven't
 submitted the rock).
 
-Use it with `lua -largcheck file.lua`, or if you want a warning rather than
+Use it with `lua -largcheck file.lua`, or, if you want a warning rather than
 an error on a failed argument check, `lua -largwarn file.lua`.
 
 Argument specifications are parsed from comments near the function declaration
@@ -109,14 +109,17 @@ Constraints can be:
     So far the only functions in the table are:
     + `integer`: the value is a number and an integer
     + `anything`: the value is not nil
-    + `file`: the value is an open file (can't tell if it's readable or
-      writable yet)
+    + `file`: the value is an open file
+      - `filein`: the value is an open, readable file
+      - `fileout`: the value is an open, writable file
   * If none of the above, and the value is table, argcheck will try to match
     the table's metatable to the constraint:
-    + if the metatable has a `__type` field that matches the constraint
-    + if the metatable has a `__typename` field that matches the constraint
+    + if the metatable has a `__type`, `__typename` or `_type`
+      field that matches the constraint
     + if the metatable has a `__typeinfo` field such that
       `mt.__typeinfo[constraint]` is true
+    + if the metatable has a `__type` field that's a function and
+      `mt.__type(value) == constraint`
     + if there's a `_G[constraint]` or `_ENV[constraint]` that is the same as
       the metatable
     + if there's an upvalue whose name matches the constraint and which is the
