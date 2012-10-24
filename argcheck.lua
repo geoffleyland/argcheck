@@ -72,9 +72,12 @@ end
 
 --- parse comments like "-- @tparam string [foo]"
 local function parse_luadoc_predef_line(l)
+  local fname = l:match("%s*%-%-+%s*@function%s+([%a_][%w_]*)")
   local constraints, name = l:match("%s*%-%-+%s*@tparam%s+(%S+)%s+(%S*)")
   if constraints then
-    return parse_constraints(constraints), name:match("([%a_][%w_]*)")
+    return parse_constraints(constraints), name:match("([%a_][%w_]*)"), fname
+  else
+    return nil, nil, fname
   end
 end
 
@@ -86,6 +89,13 @@ local function parse_postdef_line(l)
   if constraints then
     return parse_constraints(constraints), name
   end
+end
+
+
+--- parse function names
+local function parse_function_name(l)
+  return l:match("function%s+([%a_][%w_]*)%s*%(") or
+         l:match("([%a_][%w_]*)%s*=%s*function%s*%(")
 end
 
 
@@ -113,12 +123,14 @@ local function parse_function(filename, linedefined)
   end
 
   local constraints = {}
+  local function_name
 
   -- Walk forward through the pre-definition comments looking for type
   -- constraints
   for i = start_line, linedefined - 1 do
-    local c, name = parse_pre(source[i])
+    local c, name, fname = parse_pre(source[i])
     constraints[name or (#constraints+1)] = c
+    function_name = function_name or fname
   end
 
   -- walk forward for the looking for comments like
@@ -128,6 +140,7 @@ local function parse_function(filename, linedefined)
   while i > 0 do
     local line = source[i]
     if i == linedefined then
+      function_name = function_name or parse_function_name(line)
       line = line:match("%((.*)")
     end
     local c, name = parse_post(line)
@@ -142,31 +155,38 @@ local function parse_function(filename, linedefined)
   if not next(constraints) then
     return
   else
-    return constraints
+    return constraints, function_name
   end
 end
 
 
 local constraints_by_func = {}
 local constraints_by_line = {}
+local function_names_by_line = {}
+local function_names_by_func = {}
 
 local function get_constraints(func)
-  local constraints
+  local constraints, function_name
 
   local info = debug.getinfo(func, "S")
-  local source_file_name = info.source:match("@(.*)")
-  if not source_file_name then
+  local source = info.source:match("@(.*)")
+  if not source then
     constraints = -1
   else
-    local key = source_file_name..":"..tostring(info.linedefined)
+    local key = source..":"..tostring(info.linedefined)
     constraints = constraints_by_line[key]
-    if not constraints then
-      constraints = parse_function(source_file_name, info.linedefined) or -1
+    if constraints then
+      function_name = function_names_by_line[key]
+    else
+      constraints, function_name = parse_function(source, info.linedefined)
+      constraints = constraints or -1
       constraints_by_line[key] = constraints
+      function_names_by_line[key] = function_name
     end
   end
 
   constraints_by_func[func] = constraints
+  function_names_by_func[func] = function_name
   return constraints
 end
 
@@ -303,7 +323,10 @@ local function check_arg(value, constraints, argnum, func)
     end
     if constraints[2] then ts = ts.." or "..constraints[#constraints] end
     local vs = value == nil and "" or " '"..tostring(value).."'"
-    local fname = debug.getinfo(3, "n").name -- debug.getinfo(func, "n") doesn't seem to work
+    local fname =
+      -- debug.getinfo(func, "n") doesn't seem to work
+      debug.getinfo(3, "n").name or 
+      function_names_by_func[func]
     local message = ("bad argument #%d to '%s' (%s expected, got %s%s)"):
                     format(argnum, fname, ts, type(value), vs)
     if warn then
