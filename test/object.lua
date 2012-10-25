@@ -21,4 +21,11 @@ test_all(
   setmetatable({}, typename_class),
   setmetatable({}, typeinfo_class))
 
+test_all(
+  setmetatable({}, global_class),
+  setmetatable({}, upvalue_class),
+  setmetatable({}, type_class),
+  setmetatable({}, typename_class),
+  setmetatable({}, typeinfo_class))
+
 test_all(1)    

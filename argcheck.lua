@@ -45,22 +45,24 @@ local function parse_constraints(l)
   local constraints = {}
   local l2 = l:match("%?|?(.*)")
   if l2 then
-    constraints[1] = "nil"
+    constraints[1] = { description = "nil" }
     l = l2
   end
   while true do
     local c, l2 = l:match("([^|]+)|(.*)")
     if not c then
-      if l ~= "" then constraints[#constraints+1] = l end
+      if l ~= "" then
+        constraints[#constraints+1] = { description = l }
+      end
       break
     else
-      constraints[#constraints+1] = c
+      constraints[#constraints+1] = { description = c }
     end
     l = l2
   end
 
   if not constraints[1] or
-     (constraints[1] == "nil" and not constraints[2]) then
+     (constraints[1].description == "nil" and not constraints[2]) then
     return
   end
 
@@ -167,49 +169,9 @@ local function parse_function(filename, linedefined)
 end
 
 
-local constraints_by_func = {}
-local constraints_by_line = {}
-local function_names_by_line = {}
-local function_names_by_func = {}
+-- metatable checkers --------------------------------------------------------
 
-local function get_constraints(func)
-  local constraints, function_name
-
-  local info = getinfo(func, "S")
-  local source = info.source:match("@(.*)")
-  if not source then
-    constraints = -1
-  else
-    local key = source..":"..tostring(info.linedefined)
-    constraints = constraints_by_line[key]
-    if constraints then
-      function_name = function_names_by_line[key]
-    else
-      constraints, function_name = parse_function(source, info.linedefined)
-      constraints = constraints or -1
-      constraints_by_line[key] = constraints
-      function_names_by_line[key] = function_name
-    end
-  end
-
-  constraints_by_func[func] = constraints
-  function_names_by_func[func] = function_name
-  return constraints
-end
-
-
--- function constraints ------------------------------------------------------
-
-local function_constraints =
-{
-  integer       = function(v, t) return t == "number" and floor(v) == v end,
-  anything      = function(v) return v ~= nil end,
-}
-
-
--- type checkers -------------------------------------------------------------
-
-local type_checkers =
+local metatable_checkers =
 {
   function(constraint, mt)
     return mt.__type == constraint
@@ -248,6 +210,40 @@ local type_checkers =
 }
 
 
+local metatable_cache = {}
+
+local function metatable_matcher(metatable_name)
+  return function(v, t, mt, func)
+    if t == "table" or t == "userdata" then
+      mt = mt or getmetatable(v)
+
+      if mt then
+        local cached = metatable_cache[metatable_name]
+        if cached then
+          return mt == cached, mt
+        end
+
+        for i = 1, #metatable_checkers do
+          if metatable_checkers[i](metatable_name, mt, value, func) then
+            metatable_cache[metatable_name] = mt
+            return true, mt
+          end
+        end
+      end
+    end
+  end
+end
+
+
+-- function constraints ------------------------------------------------------
+
+local function_constraints =
+{
+  integer       = function(v, t) return t == "number" and floor(v) == v end,
+  anything      = function(v) return v ~= nil end,
+}
+
+
 -- check a single constraint against a value ---------------------------------
 
 local lua_types =
@@ -262,25 +258,26 @@ local lua_types =
   table         = true
 }
 
+for k in pairs(lua_types) do
+  lua_types[k] = function(v, t) return t == k end
+end
 
-local function check_constraint(constraint, value, func)
-  local vt = type(value)
 
+local function compile_constraint(constraint)
   if lua_types[constraint] then
-    return vt == constraint
+    return lua_types[constraint]
 
   elseif function_constraints[constraint] then
-    return function_constraints[constraint](value, vt)
+    return function_constraints[constraint]
 
-  -- literal match for a string
   elseif constraint:match('^".*"$') or constraint:match("^'.*'$") then
-    return value == constraint:sub(2, -2)
+    local literal = constraint:sub(2, -2)
+    return function(v) return v == literal end
 
-  -- literal match for a number
   elseif tonumber(constraint) then
-    return value == tonumber(constraint)
+    local literal = tonumber(constraint)
+    return function(v) return v == literal end
 
-  -- number range
   elseif constraint:match(".*%.%..*") then
     local low, high = constraint:match("(.*)%.%.(.*)")
     local integer = not low:match("[%.eE]") and not high:match("[%.eE]")
@@ -288,21 +285,67 @@ local function check_constraint(constraint, value, func)
     if not low or not high then
       error("Couldn't make sense of range constraint '"..constraint.."'")
     end
-    if integer and value ~= floor(value) then return false end
-    return value >= low and value <= high
 
-  -- try all the type checkers to see if if the constraint name is associated
-  -- with the value or its metatable
-  elseif vt == "table" or vt == "userdata" then
-    local mt = getmetatable(value)
-    if mt then
-      for i = 1, #type_checkers do
-        if type_checkers[i](constraint, mt, value, func) then
-          return true
+    if integer then
+      return function(v, t)
+          return t == "number" and v == floor(v) and
+                 v >= low and v <= high
+        end
+    else
+      return function(v, t)
+          return t == "number" and
+                 v >= low and v <= high
+        end
+    end
+
+  else
+    return metatable_matcher(constraint)
+  end
+end
+
+
+local function compile_constraints(constraints)
+  for i, c in ipairs(constraints) do
+    c.func = compile_constraint(c.description)
+  end
+end
+
+
+-- Find and compile constraints ----------------------------------------------
+
+local constraints_by_func = {}
+local constraints_by_line = {}
+local function_names_by_line = {}
+local function_names_by_func = {}
+
+local function get_constraints(func)
+  local constraints, function_name
+
+  local info = getinfo(func, "S")
+  local source = info.source:match("@(.*)")
+  if not source then
+    constraints = -1
+  else
+    local key = source..":"..tostring(info.linedefined)
+    constraints = constraints_by_line[key]
+    if constraints then
+      function_name = function_names_by_line[key]
+    else
+      constraints, function_name = parse_function(source, info.linedefined)
+      if constraints then
+        for k, v in pairs(constraints) do
+          compile_constraints(v)
         end
       end
+      constraints = constraints or -1
+      constraints_by_line[key] = constraints
+      function_names_by_line[key] = function_name
     end
   end
+
+  constraints_by_func[func] = constraints
+  function_names_by_func[func] = function_name
+  return constraints
 end
 
 
@@ -311,20 +354,26 @@ end
 local warn
 
 local function check_arg(value, constraints, argnum, func)
+  local vt = type(value)
+  local mt
   local ok
   for i = 1, #constraints do
-    if check_constraint(constraints[i], value, func) then
+    local pass, mt2 = constraints[i].func(value, vt, mt, func)
+    mt = mt or mt2
+    if pass then
       ok = true
       break
     end
   end
 
   if not ok then
-    local ts = constraints[1]
+    local ts = constraints[1].description
     for i = 2, #constraints - 1 do
-      ts = ts..", "..constraints[i]
+      ts = ts..", "..constraints[i].description
     end
-    if constraints[2] then ts = ts.." or "..constraints[#constraints] end
+    if constraints[2] then
+      ts = ts.." or "..constraints[#constraints].description
+    end
     local vs = value == nil and "" or " '"..tostring(value).."'"
     local fname =
       -- getinfo(func, "n") doesn't seem to work
