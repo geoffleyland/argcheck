@@ -198,6 +198,11 @@ local metatable_checkers =
   function(constraint, mt)
     return _ENV and _ENV[constraint] == mt
   end,
+  function(constraint, mt)
+    if debug.getregistry()[constraint] == mt then
+      return true
+    end
+  end,
   function(constraint, mt, v, f)
     local i = 1
     while true do
@@ -206,7 +211,7 @@ local metatable_checkers =
       if name == constraint and value == mt then return true end
       i = i + 1
     end
-  end
+  end,
 }
 
 
