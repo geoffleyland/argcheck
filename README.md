@@ -113,7 +113,7 @@ Constraints can be:
       - `filein`: the value is an open, readable file
       - `fileout`: the value is an open, writable file
   * If none of the above, and the value is table, argcheck will try to match
-    the table's metatable to the constraint:
+    the table's metatable to the constraint.
     + if the metatable has a `__type`, `__typename` or `_type`
       field that matches the constraint
     + if the metatable has a `__typeinfo` field such that
@@ -127,8 +127,9 @@ Constraints can be:
     + if there's an upvalue whose name matches the constraint and which is the
       same as the metatable (this only works if the correct metatable is
       accessed in the function being checked)
-  If there is a match, then the correct metatable for the cache is stored in
-  a cache for quicker subsequent access.
+
+    If there is a match, then the correct metatable for the cache is stored in
+    a cache for quicker subsequent access.
 
 
 ## 3. Requirements
