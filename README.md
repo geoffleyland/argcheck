@@ -127,8 +127,8 @@ Constraints can be:
     + if there's an upvalue whose name matches the constraint and which is the
       same as the metatable (this only works if the correct metatable is
       accessed in the function being checked)
-    If there is a match, then the correct metatable for the cache is stored in
-    a cache for quicker subsequent access.
+  If there is a match, then the correct metatable for the cache is stored in
+  a cache for quicker subsequent access.
 
 
 ## 3. Requirements
