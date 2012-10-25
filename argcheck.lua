@@ -1,13 +1,18 @@
 -- Copyright (c) 2012 Incremental IP Limited
 -- see LICENSE for license information
 
+local type = type
+local getinfo, getlocal = debug.getinfo, debug.getlocal
+local floor = math.floor
+local rawopen, rawpopen, rawtmpfile = io.open, io.popen, io.tmpfile
+
 
 -- read source files ---------------------------------------------------------
 
 local source_cache = {}
 
 local function read_source_file(filename)
-  local source_file = io.open(filename, r)
+  local source_file = rawopen(filename, r)
   if not source_file then
     source_cache[filename] = -1
     return -1
@@ -19,6 +24,8 @@ local function read_source_file(filename)
     lines[i] = l
     i = i + 1
   end
+  source_file:close()
+  
   source_cache[filename] = lines
   return lines
 end
@@ -168,7 +175,7 @@ local function_names_by_func = {}
 local function get_constraints(func)
   local constraints, function_name
 
-  local info = debug.getinfo(func, "S")
+  local info = getinfo(func, "S")
   local source = info.source:match("@(.*)")
   if not source then
     constraints = -1
@@ -195,11 +202,8 @@ end
 
 local function_constraints =
 {
-  integer       = function(value)
-                    return type(value) == "number" and
-                           math.floor(value) == value
-                  end,
-  anything      = function(value) return value ~= nil end,
+  integer       = function(v, t) return t == "number" and floor(v) == v end,
+  anything      = function(v) return v ~= nil end,
 }
 
 
@@ -224,13 +228,13 @@ local type_checkers =
   end,
   function(constraint, mt, v)
     local __type = mt.__type
-    return type(__type) == "function" and type(v) == constraint
+    return type(__type) == "function" and __type(v) == constraint
   end,
   function(constraint, mt)
     return _G and _G[constraint] == mt
   end,
   function(constraint, mt)
-    return _ENV and _EVN[constraint] == mt
+    return _ENV and _ENV[constraint] == mt
   end,
   function(constraint, mt, v, f)
     local i = 1
@@ -266,7 +270,7 @@ local function check_constraint(constraint, value, func)
     return vt == constraint
 
   elseif function_constraints[constraint] then
-    return function_constraints[constraint](value)
+    return function_constraints[constraint](value, vt)
 
   -- literal match for a string
   elseif constraint:match('^".*"$') or constraint:match("^'.*'$") then
@@ -284,7 +288,7 @@ local function check_constraint(constraint, value, func)
     if not low or not high then
       error("Couldn't make sense of range constraint '"..constraint.."'")
     end
-    if integer and value ~= math.floor(value) then return false end
+    if integer and value ~= floor(value) then return false end
     return value >= low and value <= high
 
   -- try all the type checkers to see if if the constraint name is associated
@@ -323,8 +327,8 @@ local function check_arg(value, constraints, argnum, func)
     if constraints[2] then ts = ts.." or "..constraints[#constraints] end
     local vs = value == nil and "" or " '"..tostring(value).."'"
     local fname =
-      -- debug.getinfo(func, "n") doesn't seem to work
-      debug.getinfo(3, "n").name or 
+      -- getinfo(func, "n") doesn't seem to work
+      getinfo(3, "n").name or 
       function_names_by_func[func]
     local message = ("bad argument #%d to '%s' (%s expected, got %s%s)"):
                     format(argnum, fname, ts, type(value), vs)
@@ -339,7 +343,7 @@ end
 
 local function check_args()
   -- quickly see if we've parsed this closure before
-  local func = debug.getinfo(2, "f").func
+  local func = getinfo(2, "f").func
   local constraints = constraints_by_func[func]
 
   -- otherwise, take a longer route
@@ -351,7 +355,7 @@ local function check_args()
 
   local i = 1
   while true do
-    local name, value = debug.getlocal(2, i)
+    local name, value = getlocal(2, i)
     if not name then break end
     if constraints[name] then
       check_arg(value, constraints[name], i, func)
@@ -377,24 +381,21 @@ local read_modes = { r=1, ["r+"]=1, ["w+"]=1, ["a+"]=1 }
 local write_modes = { w=1, ["r+"]=1, ["w+"]=1, a=1, ["a+"]=1}
 
 
-local rawopen = io.open
 io.open = function(name, mode)
   local file, message = rawopen(name, mode)
   if file then
-    mode = mode or "r"
-    mode = mode:sub(1, 2):lower()
+    mode = (mode or "r"):sub(1, 2):lower()
     readable_files[file] = read_modes[mode]
     writable_files[file] = write_modes[write]
   end
   return file, message
 end
 
-local rawpopen = io.popen
+
 io.popen = function(name, mode)
   local file, message = rawpopen(name, mode)
   if file then
-    mode = mode or "r"
-    mode = mode:sub(1, 2):lower()
+    mode = (mode or "r"):sub(1, 2):lower()
     readable_files[file] = read_modes[mode]
     writable_files[file] = write_modes[write]
   end
@@ -402,7 +403,6 @@ io.popen = function(name, mode)
 end
 
 
-local rawtmpfile = io.tmpfile
 io.tmpfile = function()
   local file, message = rawtmpfile()
   if file then
